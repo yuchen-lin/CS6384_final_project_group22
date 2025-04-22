@@ -1,0 +1,11 @@
+# Ignore model files
+nutrition_label_detector.pt
+
+# Ignore checkpoints
+ocr/checkpoints/pretrained_wgts.tar
+
+# Ignore Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+ocr/__pycache__/ 

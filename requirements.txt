@@ -1,0 +1,9 @@
+Flask
+gunicorn
+Werkzeug
+numpy
+opencv-python
+ultralytics
+easyocr
+torch
+symspellpy
