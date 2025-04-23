@@ -178,6 +178,27 @@ def correct_spelling(text):
     lines = text.split('\n')
     corrected_lines = []
     
+    # First, preprocess to correct common OCR errors in nutrition labels
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+            
+        # Fix common OCR misreadings in nutrition values
+        # Replace 'Og', 'Omg', etc. with '0g', '0mg' (letter O to number 0)
+        line = re.sub(r'(\s|^)O([gm])', r'\1 0\2', line)
+        line = re.sub(r'(\s|^)O(\s*%)', r'\1 0\2', line)
+        
+        # Fix specific measurement unit issues
+        line = re.sub(r'(\d+)(\s*)Omg', r'\1\2 0mg', line)
+        line = re.sub(r'(\d+)(\s*)O(\s*g)', r'\1\2 0\3', line)
+        
+        # Ensure proper spacing between numbers and units
+        line = re.sub(r'(\d+)([gm])', r'\1 \2', line)
+        
+        # Preserve common nutrition label units that might get corrected incorrectly
+        line = re.sub(r'(\d+)\s*([gm])$', r'\1 \2', line)
+        lines[i] = line
+    
     for line in lines:
         if not line.strip():
             continue
@@ -190,14 +211,21 @@ def correct_spelling(text):
             if part[0]:  # Numeric part
                 corrected_line += part[0] + " "
             elif part[1]:  # Word part
-                suggestions = sym_spell.lookup(part[1].lower(), Verbosity.CLOSEST, max_edit_distance=2)
-                if suggestions:
-                    corrected_line += suggestions[0].term + " "
-                else:
+                # Don't "correct" common measurement units
+                if part[1].lower() in ['g', 'mg', 'mcg', 'iu', 'oz', 'ml']:
                     corrected_line += part[1] + " "
+                else:
+                    suggestions = sym_spell.lookup(part[1].lower(), Verbosity.CLOSEST, max_edit_distance=2)
+                    if suggestions:
+                        corrected_line += suggestions[0].term + " "
+                    else:
+                        corrected_line += part[1] + " "
             elif part[2]:  # Symbol part
                 corrected_line += part[2] + " "
                 
+        # Ensure proper spacing for measurement units
+        corrected_line = re.sub(r'(\d+)\s+([gm])([^a-zA-Z]|$)', r'\1\2\3', corrected_line)
+        
         corrected_lines.append(corrected_line.strip())
         
     return '\n'.join(corrected_lines)
@@ -208,23 +236,54 @@ def extract_nutrition_dict(text):
     
     # Common nutrition labels and their variations
     nutrition_patterns = {
-        'calories': [r'calories'],
-        'total_fat': [r'total\s*fat'],
-        'saturated_fat': [r'saturated\s*fat'],
-        'trans_fat': [r'trans\s*fat'],
-        'cholesterol': [r'cholesterol'],
-        'sodium': [r'sodium'],
-        'total_carbs': [r'total\s*carbohydrates?', r'carbs?'],
-        'dietary_fiber': [r'dietary\s*fiber'],
-        'sugars': [r'sugars?'],
-        'protein': [r'protein'],
-        'vitamin_d': [r'vitamin\s*d'],
-        'calcium': [r'calcium'],
-        'iron': [r'iron'],
-        'potassium': [r'potassium']
+        'calories': [r'calories', r'energy', r'kcal', r'cal(\.|s)?'],
+        'total_fat': [r'total\s*fat', r'fat,?\s*total', r'fat\s*content', r't\.?\s*fat'],
+        'saturated_fat': [r'saturated\s*fat', r'sat\.?\s*fat', r'sat\s*fat', r'saturates'],
+        'trans_fat': [r'trans\s*fat', r'trans-fat', r'trans\s*fatty\s*acid'],
+        'cholesterol': [r'cholesterol', r'cholest\.?'],
+        'sodium': [r'sodium', r'salt', r'na'],
+        'total_carbs': [r'total\s*carbohydrates?', r'carbs?', r'carbohydrates?,?\s*total', r'total\s*carbs?', r't\.?\s*carbs?'],
+        'dietary_fiber': [r'dietary\s*fiber', r'fiber,?\s*dietary', r'fibre', r'fiber(\s|$)', r'roughage'],
+        'sugars': [r'sugars?', r'total\s*sugars?', r'added\s*sugars?'],
+        'protein': [r'protein', r'proteins'],
+        'vitamin_d': [r'vitamin\s*d', r'vit\.?\s*d'],
+        'calcium': [r'calcium', r'ca'],
+        'iron': [r'iron', r'fe'],
+        'potassium': [r'potassium', r'k'],
+        'vitamin_a': [r'vitamin\s*a', r'vit\.?\s*a'],
+        'vitamin_c': [r'vitamin\s*c', r'vit\.?\s*c', r'ascorbic\s*acid'],
+        'vitamin_e': [r'vitamin\s*e', r'vit\.?\s*e'],
+        'thiamin': [r'thiamin', r'vitamin\s*b1', r'vit\.?\s*b1', r'thiamine'],
+        'riboflavin': [r'riboflavin', r'vitamin\s*b2', r'vit\.?\s*b2'],
+        'niacin': [r'niacin', r'vitamin\s*b3', r'vit\.?\s*b3'],
+        'vitamin_b6': [r'vitamin\s*b6', r'vit\.?\s*b6', r'pyridoxine'],
+        'folate': [r'folate', r'folic\s*acid', r'vitamin\s*b9', r'vit\.?\s*b9'],
+        'vitamin_b12': [r'vitamin\s*b12', r'vit\.?\s*b12', r'cobalamin'],
+        'biotin': [r'biotin', r'vitamin\s*b7', r'vit\.?\s*b7'],
+        'pantothenic_acid': [r'pantothenic\s*acid', r'vitamin\s*b5', r'vit\.?\s*b5', r'pantothenate'],
+        'phosphorus': [r'phosphorus', r'phosphorous', r'p'],
+        'iodine': [r'iodine', r'i'],
+        'magnesium': [r'magnesium', r'mg'],
+        'zinc': [r'zinc', r'zn'],
+        'selenium': [r'selenium', r'se'],
+        'copper': [r'copper', r'cu'],
+        'manganese': [r'manganese', r'mn'],
+        'chromium': [r'chromium', r'cr'],
+        'molybdenum': [r'molybdenum', r'mo'],
+        'chloride': [r'chloride', r'cl'],
+        'choline': [r'choline'],
+        'serving_size': [r'serving\s*size', r'portion\s*size', r'serving', r'portion'],
+        'servings_per_container': [r'servings?\s*per\s*container', r'portions?\s*per\s*container', r'servings?\s*per\s*pack(age)?'],
+        'calories_from_fat': [r'calories\s*from\s*fat', r'cal\.?\s*from\s*fat']
     }
     
-    lines = text.split('\n')
+    # Pre-processing for common OCR misreadings specific to values
+    processed_text = text
+    # Replace all instances of 'O' followed by g, mg, etc. with '0'
+    processed_text = re.sub(r'(\s|^)O([gm%])', r'\1 0\2', processed_text)
+    processed_text = re.sub(r'(\d+)(\s*)Omg', r'\1\2 0mg', processed_text)
+    
+    lines = processed_text.split('\n')
     
     for line in lines:
         line = line.lower().strip()
@@ -234,10 +293,27 @@ def extract_nutrition_dict(text):
         # Try to identify nutritional information in each line
         for nutrient, patterns in nutrition_patterns.items():
             for pattern in patterns:
-                match = re.search(f'({pattern})[:\s]*(\d+(?:\.\d+)?)(\s*\w+)?', line, re.IGNORECASE)
+                # More flexible matching for values, handling both O and 0
+                match = re.search(f'({pattern})[:\s]*([O0-9]+(?:\.[O0-9]+)?)(\s*\w+)?', line, re.IGNORECASE)
                 if match:
-                    amount = match.group(2)
-                    unit = match.group(3).strip() if match.group(3) else ""
+                    # Convert any 'O' in the value to '0'
+                    amount_str = match.group(2)
+                    amount = re.sub(r'O', '0', amount_str)
+                    
+                    # Get the unit and ensure it's parsed correctly
+                    unit_str = match.group(3) if match.group(3) else ""
+                    unit = unit_str.strip()
+                    
+                    # Ensure common units are preserved
+                    if not unit and (amount.endswith('g') or amount.endswith('mg')):
+                        # Handle cases where the unit is attached to the number
+                        if amount.endswith('g'):
+                            unit = 'g'
+                            amount = amount[:-1]
+                        elif amount.endswith('mg'):
+                            unit = 'mg'
+                            amount = amount[:-2]
+                    
                     nutrition_dict[nutrient] = (amount, unit)
                     break
     
