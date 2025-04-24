@@ -46,66 +46,6 @@ def calculate_iou(box1, box2):
     
     return iou
 
-def merge_overlapping_boxes(boxes, iou_threshold=0.5):
-    """
-    Merge boxes with high IoU into a single box that covers all the overlapping areas.
-    
-    Args:
-        boxes: List of boxes in format (x1, y1, x2, y2)
-        iou_threshold: Threshold for considering boxes as overlapping
-        
-    Returns:
-        List of merged boxes
-    """
-    if len(boxes) <= 1:
-        return boxes
-    
-    # Convert to numpy array for easier operations
-    boxes_array = np.array(boxes)
-    
-    # Keep track of which boxes to merge
-    merged_boxes = []
-    groups = []  # List of lists, each list is a group of indices to merge
-    
-    # Find boxes to merge
-    for i in range(len(boxes)):
-        found_group = False
-        box1 = boxes[i]
-        
-        # Check if this box should be added to an existing group
-        for group_idx, group in enumerate(groups):
-            for j in group:
-                box2 = boxes[j]
-                iou = calculate_iou(box1, box2)
-                if iou > iou_threshold:
-                    # Add to this group
-                    if i not in group:
-                        groups[group_idx].append(i)
-                    found_group = True
-                    break
-            if found_group:
-                break
-        
-        # If not found in any group, create a new group
-        if not found_group:
-            groups.append([i])
-    
-    # Merge boxes in each group
-    for group in groups:
-        if len(group) == 1:
-            # Only one box in group, no need to merge
-            merged_boxes.append(boxes[group[0]])
-        else:
-            # Merge all boxes in the group by taking min/max coordinates
-            group_boxes = np.array([boxes[i] for i in group])
-            x1 = np.min(group_boxes[:, 0])
-            y1 = np.min(group_boxes[:, 1])
-            x2 = np.max(group_boxes[:, 2])
-            y2 = np.max(group_boxes[:, 3])
-            merged_boxes.append((int(x1), int(y1), int(x2), int(y2)))
-    
-    return merged_boxes
-
 @app.route("/")
 def index():
     """Home page with file upload form."""
@@ -155,6 +95,10 @@ def detect():
     # Perform detection
     results = model(img)
 
+    # Log detection results
+    print(f"Image size: {img.shape}")
+    print(f"Number of detection results: {len(results)}")
+    
     # Process results and create in-memory crops
     crops = []
     raw_texts = []
@@ -162,40 +106,82 @@ def detect():
     nutrition_dicts = []
     llm_outputs = []
 
-    for r in results:
+    for r_idx, r in enumerate(results):
         boxes = r.boxes
-
-        # Extract all box coordinates
-        all_boxes = []
-        for box in boxes:
+        print(f"Result {r_idx+1}: Found {len(boxes)} boxes")
+        
+        # Process each detected box directly
+        for box_idx, box in enumerate(boxes):
             x1, y1, x2, y2 = box.xyxy[0]
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-            all_boxes.append((x1, y1, x2, y2))
-
-        # Merge boxes with high IoU overlap
-        merged_boxes = merge_overlapping_boxes(all_boxes, iou_threshold=0.5)
-
-        # Process merged boxes
-        for x1, y1, x2, y2 in merged_boxes:
+            conf = float(box.conf[0])
+            print(f"  Box {box_idx+1}: x1={x1}, y1={y1}, x2={x2}, y2={y2}, conf={conf:.4f}")
+            
+            # Print bounds info for debugging
+            h, w = img.shape[:2]
+            print(f"Image dimensions: {w}x{h}")
+            
+            # Ensure coordinates are within image boundaries
+            x1 = max(0, min(x1, w-1))
+            y1 = max(0, min(y1, h-1))
+            x2 = max(0, min(x2, w))
+            y2 = max(0, min(y2, h))
+            
+            print(f"Box after validation: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
+            
+            # Skip if dimensions are invalid
+            if x1 >= x2 or y1 >= y2:
+                print(f"Invalid box dimensions: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
+                continue
+            
             # Extract crop
-            crop = img[y1:y2, x1:x2]
-
-            # Extract nutrition text using OCR with the crop image array
-            raw_text, corrected_text, nutrition_dict = extract_nutrition_text(crop)
-            raw_texts.append(raw_text)
-            corrected_texts.append(corrected_text)
-            nutrition_dicts.append(nutrition_dict)
-
-            # Convert OpenCV crop (BGR) to PIL Image (RGB) and pass to LLM
-            crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-            pil_crop = Image.fromarray(crop_rgb)
-            llm_result = extract_nutrition_from_image(pil_crop)
-            llm_outputs.append(llm_result if llm_result else {})
-
-            # Convert crop to base64 for embedding in HTML
-            _, buffer = cv2.imencode(".jpg", crop)
-            crop_base64 = base64.b64encode(buffer).decode("utf-8")
-            crops.append(crop_base64)
+            try:
+                print(f"Extracting crop from coordinates: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
+                crop = img[y1:y2, x1:x2]
+                print(f"Crop extracted successfully, shape: {crop.shape}, dtype: {crop.dtype}")
+                
+                print(f"Crop statistics - min: {crop.min()}, max: {crop.max()}, mean: {crop.mean():.2f}")
+                
+                # Skip invalid crops
+                if crop is None or crop.size == 0:
+                    print("⚠️ Skipping: Crop is None or empty")
+                    continue
+                
+                # Extract nutrition text using OCR with the crop image array
+                print("Passing crop to OCR engine...")
+                raw_text, corrected_text, nutrition_dict = extract_nutrition_text(crop)
+                print(f"OCR completed. Text length: {len(raw_text)}, nutrition items: {len(nutrition_dict)}")
+                
+                # If OCR failed with error message
+                if raw_text.startswith("Error"):
+                    print(f"⚠️ OCR Error: {raw_text}")
+                    
+                raw_texts.append(raw_text)
+                corrected_texts.append(corrected_text)
+                nutrition_dicts.append(nutrition_dict)
+                
+                # Convert OpenCV crop (BGR) to PIL Image (RGB) and pass to LLM
+                print("Converting crop to PIL Image for LLM...")
+                crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                pil_crop = Image.fromarray(crop_rgb)
+                print(f"PIL Image created successfully, size: {pil_crop.size}, mode: {pil_crop.mode}")
+                
+                llm_result = extract_nutrition_from_image(pil_crop)
+                print(f"LLM processing completed. Result items: {len(llm_result) if llm_result else 0}")
+                
+                llm_outputs.append(llm_result if llm_result else {})
+                
+                # Convert crop to base64 for embedding in HTML
+                _, buffer = cv2.imencode(".jpg", crop)
+                crop_base64 = base64.b64encode(buffer).decode("utf-8")
+                crops.append(crop_base64)
+                print(f"Crop {len(crops)} processed successfully ✓")
+                
+            except Exception as e:
+                import traceback
+                print(f"❌ Error processing crop: {str(e)}")
+                print(traceback.format_exc())
+                continue
 
     # Return results page with embedded images
     if crops:

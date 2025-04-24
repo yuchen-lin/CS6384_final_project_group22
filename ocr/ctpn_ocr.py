@@ -330,26 +330,51 @@ def extract_nutrition_text(image):
         tuple: (raw_text, corrected_text, nutrition_dict)
     """
     try:
+        # Add logging to diagnose the issue
+        print(f"Image type: {type(image)}")
+        if image is None:
+            print("ERROR: Image is None")
+            return "Error: No image data provided", "", {}
+        
+        if isinstance(image, np.ndarray):
+            print(f"Image shape: {image.shape}, Image size: {image.size}")
+        else:
+            print(f"Image is not a numpy array but a {type(image)}")
+        
         # Detect text regions
+        print("Starting text detection...")
         image, boxes = detect_text(image)
+        print(f"Text detection completed. Found {len(boxes)} boxes")
         
         # Recognize text in the detected regions
+        print("Starting text recognition...")
         ocr_results = recognize_text(image, boxes)
+        print(f"Text recognition completed. Recognized {len(ocr_results)} text regions")
         
         # Combine all text into a single string
         raw_text = "\n".join([result['text'] for result in ocr_results])
         
         # Skip empty results
         if not raw_text:
+            print("No text was detected in the image")
             return "No text detected", "", {}
         
+        print(f"Raw text extracted: {raw_text[:100]}...")
+        
         # Correct spelling
+        print("Starting spelling correction...")
         corrected_text = correct_spelling(raw_text)
+        print("Spelling correction completed")
         
         # Extract structured nutrition information
+        print("Extracting nutrition information...")
         nutrition_dict = extract_nutrition_dict(corrected_text)
+        print(f"Extracted {len(nutrition_dict)} nutrition items")
         
         return raw_text, corrected_text, nutrition_dict
     
     except Exception as e:
+        import traceback
+        print(f"ERROR in extract_nutrition_text: {str(e)}")
+        print(f"Traceback: {traceback.format_exc()}")
         return f"Error processing image: {str(e)}", "", {}
