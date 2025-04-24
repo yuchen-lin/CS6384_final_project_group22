@@ -13,12 +13,12 @@ except Exception as e:
     print(f"Error configuring Google AI SDK: {e}")
 
 
-def extract_nutrition_from_image(image_path: str) -> dict | None:
+def extract_nutrition_from_image(image_input) -> dict | None:
     """
     Extracts nutrition information from a nutrition label image using Gemini Vision.
 
     Args:
-        image_path: Path to the nutrition label image file.
+        image_input: Path to the nutrition label image file OR a PIL.Image.Image object.
 
     Returns:
         A dictionary containing the extracted nutrition data in the specified format,
@@ -26,13 +26,20 @@ def extract_nutrition_from_image(image_path: str) -> dict | None:
         Example format:
         {'protein': ('0', 'g'), 'sodium': ('0', 'mg'), ...}
     """
-    try:
-        img = Image.open(image_path)
-    except FileNotFoundError:
-        print(f"Error: Image file not found at {image_path}")
-        return None
-    except Exception as e:
-        print(f"Error opening image {image_path}: {e}")
+    img = None
+    if isinstance(image_input, Image.Image):
+        img = image_input
+    elif isinstance(image_input, str):
+        try:
+            img = Image.open(image_input)
+        except FileNotFoundError:
+            print(f"Error: Image file not found at {image_input}")
+            return None
+        except Exception as e:
+            print(f"Error opening image {image_input}: {e}")
+            return None
+    else:
+        print("Error: image_input must be a file path or PIL.Image.Image object")
         return None
 
     # Set up prompt
@@ -72,7 +79,7 @@ def extract_nutrition_from_image(image_path: str) -> dict | None:
 
     try:
         # Generate nutrition info from image
-        print(f"Sending image {image_path} to Gemini...")
+        print("Sending image to Gemini...")
         response = model.generate_content([prompt, img])
         print("Received response from Gemini.")
 
