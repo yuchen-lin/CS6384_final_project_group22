@@ -7,16 +7,19 @@ import numpy as np
 import io
 import base64
 from ocr.ctpn_ocr import extract_nutrition_text
+from llm.llm_vision import extract_nutrition_from_image
+from PIL import Image
 
 app = Flask(__name__)
 
 # Load YOLO model
 model = YOLO("nutrition_label_detector.pt")
 
+
 @app.route("/")
 def index():
     """Home page with file upload form."""
-    return '''
+    return """
     <!doctype html>
     <html>
       <head>
@@ -41,57 +44,65 @@ def index():
         </div>
       </body>
     </html>
-    '''
+    """
+
 
 @app.route("/detect", methods=["POST"])
 def detect():
     """Process uploaded image using YOLO and return results."""
-    if 'file' not in request.files:
+    if "file" not in request.files:
         return "No file part", 400
-    
-    file = request.files['file']
-    if file.filename == '':
+
+    file = request.files["file"]
+    if file.filename == "":
         return "No selected file", 400
-    
+
     # Read image file directly into memory
     file_bytes = file.read()
     nparr = np.frombuffer(file_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    
+
     # Perform detection
     results = model(img)
-    
+
     # Process results and create in-memory crops
     crops = []
     raw_texts = []
     corrected_texts = []
     nutrition_dicts = []
-    
+    llm_outputs = []
+
     for r in results:
         boxes = r.boxes
-        
+
         for i, box in enumerate(boxes):
             # Get coordinates
             x1, y1, x2, y2 = box.xyxy[0]
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-            
+
             # Extract crop
             crop = img[y1:y2, x1:x2]
-            
+
             # Extract nutrition text using OCR with the crop image array
             raw_text, corrected_text, nutrition_dict = extract_nutrition_text(crop)
             raw_texts.append(raw_text)
             corrected_texts.append(corrected_text)
             nutrition_dicts.append(nutrition_dict)
-            
+
+            # Convert OpenCV crop (BGR) to PIL Image (RGB) and pass to LLM
+            crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+            pil_crop = Image.fromarray(crop_rgb)
+            llm_result = extract_nutrition_from_image(pil_crop)
+            llm_outputs.append(llm_result if llm_result else {})
+
             # Convert crop to base64 for embedding in HTML
-            _, buffer = cv2.imencode('.jpg', crop)
-            crop_base64 = base64.b64encode(buffer).decode('utf-8')
+            _, buffer = cv2.imencode(".jpg", crop)
+            crop_base64 = base64.b64encode(buffer).decode("utf-8")
             crops.append(crop_base64)
-    
+
     # Return results page with embedded images
     if crops:
-        result_html = '''
+        result_html = """
         <!doctype html>
         <html>
           <head>
@@ -142,37 +153,74 @@ def detect():
             <div class="container">
               <h1>Nutrition Label Detection Results</h1>
               <div class="results">
-        '''
-        
-        for i, (crop_base64, raw_text, corrected_text, nutrition_dict) in enumerate(zip(crops, raw_texts, corrected_texts, nutrition_dicts)):
+        """
+
+        for i, (
+            crop_base64,
+            raw_text,
+            corrected_text,
+            nutrition_dict,
+            llm_output,
+        ) in enumerate(
+            zip(crops, raw_texts, corrected_texts, nutrition_dicts, llm_outputs)
+        ):
             # Create HTML for nutrition table
-            nutrition_table = '''
+            nutrition_table = """
             <table class="nutrition-table">
                 <tr>
                     <th>Nutrient</th>
                     <th>Amount</th>
                     <th>Unit</th>
                 </tr>
-            '''
-            
+            """
+
             for nutrient, (amount, unit) in nutrition_dict.items():
                 # Convert keys like total_fat to "Total Fat" for display
-                display_name = ' '.join(word.capitalize() for word in nutrient.split('_'))
-                nutrition_table += f'''
+                display_name = " ".join(
+                    word.capitalize() for word in nutrient.split("_")
+                )
+                nutrition_table += f"""
                 <tr>
                     <td>{display_name}</td>
                     <td>{amount}</td>
                     <td>{unit}</td>
                 </tr>
-                '''
-            
-            nutrition_table += '</table>'
-            
+                """
+
+            nutrition_table += "</table>"
+
             # No nutrients detected message
             if not nutrition_dict:
-                nutrition_table = "<p>No structured nutrition data could be extracted.</p>"
-            
-            result_html += f'''
+                nutrition_table = (
+                    "<p>No structured nutrition data could be extracted.</p>"
+                )
+
+            # LLM output table
+            if llm_output:
+                llm_table = """
+                <table class="nutrition-table">
+                    <tr>
+                        <th>Nutrient</th>
+                        <th>Amount</th>
+                        <th>Unit</th>
+                    </tr>
+                """
+                for nutrient, (amount, unit) in llm_output.items():
+                    display_name = " ".join(
+                        word.capitalize() for word in nutrient.split("_")
+                    )
+                    llm_table += f"""
+                    <tr>
+                        <td>{display_name}</td>
+                        <td>{amount}</td>
+                        <td>{unit}</td>
+                    </tr>
+                    """
+                llm_table += "</table>"
+            else:
+                llm_table = "<p>No LLM output available.</p>"
+
+            result_html += f"""
                 <div class="result-item result-{i}">
                   <div class="result-content">
                     <div class="image-container">
@@ -184,6 +232,7 @@ def detect():
                     <div class="text-container">
                       <div class="tabs">
                         <div class="tab active" id="structured-{i}" onclick="switchTab({i}, 'structured')">Structured Data</div>
+                        <div class="tab" id="llm-{i}" onclick="switchTab({i}, 'llm')">LLM Output</div>
                         <div class="tab" id="corrected-{i}" onclick="switchTab({i}, 'corrected')">Corrected Text</div>
                         <div class="tab" id="raw-{i}" onclick="switchTab({i}, 'raw')">Raw Text</div>
                       </div>
@@ -191,6 +240,11 @@ def detect():
                       <div id="structured-content-{i}" class="tab-content active">
                         <h3>Structured Nutrition Data</h3>
                         {nutrition_table}
+                      </div>
+                      
+                      <div id="llm-content-{i}" class="tab-content">
+                        <h3>LLM Output</h3>
+                        {llm_table}
                       </div>
                       
                       <div id="corrected-content-{i}" class="tab-content">
@@ -205,9 +259,9 @@ def detect():
                     </div>
                   </div>
                 </div>
-            '''
-        
-        result_html += '''
+            """
+
+        result_html += """
               </div>
               <div class="back-btn">
                 <a href="/">← Back to upload</a>
@@ -215,10 +269,14 @@ def detect():
             </div>
           </body>
         </html>
-        '''
+        """
         return result_html
     else:
-        return "No nutrition labels detected in the image. <a href='/'>Try again</a>", 404
+        return (
+            "No nutrition labels detected in the image. <a href='/'>Try again</a>",
+            404,
+        )
+
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
