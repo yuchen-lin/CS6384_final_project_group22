@@ -294,7 +294,7 @@ def extract_nutrition_dict(text):
         for nutrient, patterns in nutrition_patterns.items():
             for pattern in patterns:
                 # More flexible matching for values, handling both O and 0
-                match = re.search(f'({pattern})[:\s]*([O0-9]+(?:\.[O0-9]+)?)(\s*\w+)?', line, re.IGNORECASE)
+                match = re.search(r'(' + pattern + r')[:\s]*([O0-9]+(?:\.[O0-9]+)?)(\s*\w+)?', line, re.IGNORECASE)
                 if match:
                     # Convert any 'O' in the value to '0'
                     amount_str = match.group(2)
