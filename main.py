@@ -15,6 +15,96 @@ app = Flask(__name__)
 # Load YOLO model
 model = YOLO("nutrition_label_detector.pt")
 
+def calculate_iou(box1, box2):
+    """Calculate Intersection over Union (IoU) between two bounding boxes."""
+    # Extract coordinates
+    x1_1, y1_1, x2_1, y2_1 = box1
+    x1_2, y1_2, x2_2, y2_2 = box2
+    
+    # Calculate area of each box
+    area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
+    area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
+    
+    # Calculate coordinates of intersection
+    x1_i = max(x1_1, x1_2)
+    y1_i = max(y1_1, y1_2)
+    x2_i = min(x2_1, x2_2)
+    y2_i = min(y2_1, y2_2)
+    
+    # Check if there is an intersection
+    if x2_i <= x1_i or y2_i <= y1_i:
+        return 0.0
+    
+    # Calculate intersection area
+    intersection_area = (x2_i - x1_i) * (y2_i - y1_i)
+    
+    # Calculate union area
+    union_area = area1 + area2 - intersection_area
+    
+    # Calculate IoU
+    iou = intersection_area / union_area
+    
+    return iou
+
+def merge_overlapping_boxes(boxes, iou_threshold=0.5):
+    """
+    Merge boxes with high IoU into a single box that covers all the overlapping areas.
+    
+    Args:
+        boxes: List of boxes in format (x1, y1, x2, y2)
+        iou_threshold: Threshold for considering boxes as overlapping
+        
+    Returns:
+        List of merged boxes
+    """
+    if len(boxes) <= 1:
+        return boxes
+    
+    # Convert to numpy array for easier operations
+    boxes_array = np.array(boxes)
+    
+    # Keep track of which boxes to merge
+    merged_boxes = []
+    groups = []  # List of lists, each list is a group of indices to merge
+    
+    # Find boxes to merge
+    for i in range(len(boxes)):
+        found_group = False
+        box1 = boxes[i]
+        
+        # Check if this box should be added to an existing group
+        for group_idx, group in enumerate(groups):
+            for j in group:
+                box2 = boxes[j]
+                iou = calculate_iou(box1, box2)
+                if iou > iou_threshold:
+                    # Add to this group
+                    if i not in group:
+                        groups[group_idx].append(i)
+                    found_group = True
+                    break
+            if found_group:
+                break
+        
+        # If not found in any group, create a new group
+        if not found_group:
+            groups.append([i])
+    
+    # Merge boxes in each group
+    for group in groups:
+        if len(group) == 1:
+            # Only one box in group, no need to merge
+            merged_boxes.append(boxes[group[0]])
+        else:
+            # Merge all boxes in the group by taking min/max coordinates
+            group_boxes = np.array([boxes[i] for i in group])
+            x1 = np.min(group_boxes[:, 0])
+            y1 = np.min(group_boxes[:, 1])
+            x2 = np.max(group_boxes[:, 2])
+            y2 = np.max(group_boxes[:, 3])
+            merged_boxes.append((int(x1), int(y1), int(x2), int(y2)))
+    
+    return merged_boxes
 
 @app.route("/")
 def index():
@@ -75,11 +165,18 @@ def detect():
     for r in results:
         boxes = r.boxes
 
-        for i, box in enumerate(boxes):
-            # Get coordinates
+        # Extract all box coordinates
+        all_boxes = []
+        for box in boxes:
             x1, y1, x2, y2 = box.xyxy[0]
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+            all_boxes.append((x1, y1, x2, y2))
 
+        # Merge boxes with high IoU overlap
+        merged_boxes = merge_overlapping_boxes(all_boxes, iou_threshold=0.5)
+
+        # Process merged boxes
+        for x1, y1, x2, y2 in merged_boxes:
             # Extract crop
             crop = img[y1:y2, x1:x2]
 
