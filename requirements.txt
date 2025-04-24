@@ -7,3 +7,5 @@ ultralytics
 easyocr
 torch
 symspellpy
+google-generativeai
+dotenv

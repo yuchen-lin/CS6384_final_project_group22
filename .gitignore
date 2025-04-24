@@ -9,3 +9,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 ocr/__pycache__/ 
+venv
+
+# Ignore environment and image files
+*.env
+llm/*.png
