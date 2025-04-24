@@ -298,6 +298,11 @@ def extract_nutrition_dict(text):
                 if match:
                     # Convert any 'O' in the value to '0'
                     amount_str = match.group(2)
+                    # Add null check to prevent TypeError on macOS
+                    if amount_str is None:
+                        print(f"Warning: Matched pattern '{pattern}' but amount is None in line: '{line}'")
+                        continue
+                        
                     amount = re.sub(r'O', '0', amount_str)
                     
                     # Get the unit and ensure it's parsed correctly
