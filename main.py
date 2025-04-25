@@ -9,6 +9,7 @@ import base64
 from ocr.ctpn_ocr import extract_nutrition_text
 from llm.llm_vision import extract_nutrition_from_image
 from PIL import Image
+import datetime
 
 app = Flask(__name__)
 
@@ -45,6 +46,74 @@ def calculate_iou(box1, box2):
     iou = intersection_area / union_area
     
     return iou
+
+def save_results_to_file(original_filename, raw_text, corrected_text, nutrition_dict, llm_output):
+    """
+    Save the tabs' content to a text file in the results folder.
+    
+    Args:
+        original_filename: Original filename of the uploaded image
+        raw_text: Raw OCR text
+        corrected_text: Corrected OCR text
+        nutrition_dict: Dictionary of nutrition values from OCR
+        llm_output: Dictionary of nutrition values from LLM
+    """
+    # Create results directory if it doesn't exist
+    results_dir = "results"
+    if not os.path.exists(results_dir):
+        os.makedirs(results_dir)
+    
+    # Get base filename without extension and sanitize it
+    base_filename = os.path.splitext(os.path.basename(original_filename))[0]
+    base_filename = secure_filename(base_filename)
+    
+    # Create a timestamp for uniqueness
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Create output filename
+    output_filename = f"{base_filename}_{timestamp}.txt"
+    output_path = os.path.join(results_dir, output_filename)
+    
+    # Format structured data
+    structured_data = ""
+    for nutrient, (amount, unit) in nutrition_dict.items():
+        display_name = " ".join(word.capitalize() for word in nutrient.split("_"))
+        structured_data += f"{display_name}: {amount} {unit}\n"
+    
+    # Format LLM output
+    llm_data = ""
+    if llm_output:
+        # Handle different possible formats of LLM output
+        if isinstance(next(iter(llm_output.values()), None), tuple):
+            # Format: {nutrient: (amount, unit)}
+            for nutrient, (amount, unit) in llm_output.items():
+                display_name = " ".join(word.capitalize() for word in nutrient.split("_"))
+                llm_data += f"{display_name}: {amount} {unit}\n"
+        else:
+            # Format: {nutrient: value}
+            for nutrient, value in llm_output.items():
+                display_name = " ".join(word.capitalize() for word in nutrient.split("_"))
+                llm_data += f"{display_name}: {value}\n"
+    
+    # Write to file
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("=== NUTRITION LABEL RESULTS ===\n\n")
+        
+        f.write("--- STRUCTURED DATA ---\n")
+        f.write(structured_data if structured_data else "No structured data available.\n")
+        f.write("\n")
+        
+        f.write("--- LLM OUTPUT ---\n")
+        f.write(llm_data if llm_data else "No LLM output available.\n")
+        f.write("\n")
+        
+        f.write("--- CORRECTED TEXT ---\n")
+        f.write(corrected_text + "\n\n")
+        
+        f.write("--- RAW TEXT ---\n")
+        f.write(raw_text + "\n")
+    
+    print(f"Results saved to {output_path}")
 
 @app.route("/")
 def index():
@@ -92,8 +161,8 @@ def detect():
     nparr = np.frombuffer(file_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-    # Perform detection
-    results = model(img)
+    # Perform detection with explicit confidence threshold
+    results = model(img, conf=0.5)  # Set confidence threshold to 0.5 for consistency across platforms
 
     # Log detection results
     print(f"Image size: {img.shape}")
@@ -170,6 +239,15 @@ def detect():
                 print(f"LLM processing completed. Result items: {len(llm_result) if llm_result else 0}")
                 
                 llm_outputs.append(llm_result if llm_result else {})
+                
+                # Save results to file
+                save_results_to_file(
+                    file.filename,
+                    raw_text,
+                    corrected_text,
+                    nutrition_dict,
+                    llm_result if llm_result else {}
+                )
                 
                 # Convert crop to base64 for embedding in HTML
                 _, buffer = cv2.imencode(".jpg", crop)
